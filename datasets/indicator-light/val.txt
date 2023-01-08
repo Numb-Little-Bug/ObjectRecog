@@ -1,0 +1,8 @@
+./images/val/1.png
+./images/val/2.png
+./images/val/3.png
+./images/val/4.png
+./images/val/5.png
+./images/val/6.png
+./images/val/7.png
+./images/val/8.png
