@@ -7,4 +7,4 @@ val: ./datasets/indicator-light/val.txt
 nc: 3
 
 # class names
-names: [ 'red', 'green', 'off' ]
+names: [ 'red', 'off', 'green' ]
