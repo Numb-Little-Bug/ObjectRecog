@@ -5,7 +5,10 @@ from pathlib import Path
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
+import numpy as np
 from numpy import random
+import json
+from sklearn.cluster import KMeans
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
@@ -20,6 +23,12 @@ def detect(save_img=False):
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://', 'https://'))
+
+    # Operating device configuration
+    if opt.operating_device_conf is not None:
+        operating_device_conf_dict = json.load(open(opt.operating_device_conf, 'r'))
+    else:
+        operating_device_conf_dict = None
 
     # Directories
     save_dir = Path(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))  # increment run
@@ -104,20 +113,113 @@ def detect(save_img=False):
                     n = (det[:, -1] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
+                lights_x = []
+                lights_y = []
+                straps_x = []
+                straps_y = []
+                switches_x = []
+                switches_y = []
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
+                    xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
                     if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
                     if save_img or view_img:  # Add bbox to image
                         label = f'{names[int(cls)]} {conf:.2f}'
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+                    
+                    if operating_device_conf_dict is not None:
+                        cls_int = int(cls.item())
+                        if cls_int == 4 or cls_int == 5 or cls_int == 7:
+                            lights_y.append(xywh[1])  # y coordinate of the top of the bounding box
+                            lights_x.append((xywh[0], cls_int))  # x coordinate of the top of the bounding box
+                        elif cls_int == 2 or cls_int == 3 or cls_int == 6:
+                            switches_y.append(xywh[1])  # y coordinate of the top of the bounding box
+                            switches_x.append((xywh[0], cls_int))  # x coordinate of the left of the bounding box
+                        elif cls_int == 0 or cls_int == 1:
+                            straps_y.append(xywh[1])  # y coordinate of the top of the bounding box
+                            straps_x.append((xywh[0], cls_int))  # x coordinate of the left of the bounding box
+                
+                if operating_device_conf_dict is not None:
+                    try:
+                        # lights
+                        # k-means clustering to find the lights with the y coordinate
+                        num_clusters = len(operating_device_conf_dict.get('lights'))
+                        lights_y_reshaped = np.array(lights_y).reshape(-1, 1)
+                        kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(lights_y_reshaped)
+                        labels = kmeans.labels_
+                        lights = [[] for i in range(num_clusters)]
+                        for i in range(len(labels)):
+                            lights[labels[i]].append((lights_x[i], lights_y[i]))
+                        for i in range(len(lights)):
+                            lights[i].sort(key=lambda x: x[0][0])
+                        lights.sort(key=lambda x: x[0][1])
+                        lights_str = ""
+                        for i in range(len(operating_device_conf_dict.get('lights'))):
+                            for j in range(len(lights[i])):
+                                lights_str += operating_device_conf_dict.get('lights').get('line_' + str(i+1)).get('light_'+str(j+1)) + ": " + str(lights[i][j][0][1]) + "\n"
+                        
+
+                        # switches
+                        # k-means clustering to find the switches with the y coordinate
+                        num_clusters = len(operating_device_conf_dict.get('switches'))
+                        switches_y_reshaped = np.array(switches_y).reshape(-1, 1)
+                        kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(switches_y_reshaped)
+                        labels = kmeans.labels_
+                        switches = [[] for i in range(num_clusters)]
+                        for i in range(len(labels)):
+                            switches[labels[i]].append((switches_x[i], switches_y[i]))
+                        for i in range(len(switches)):
+                            switches[i].sort(key=lambda x: x[0][0])
+                        switches.sort(key=lambda x: x[0][1])
+                        switches_str = ""
+                        for i in range(len(operating_device_conf_dict.get('switches'))):
+                            for j in range(len(switches[i])):
+                                switches_str += operating_device_conf_dict.get('switches').get('line_' + str(i+1)).get('switch_'+str(j+1)) + ": " + str(switches[i][j][0][1]) + "\n"
+
+                        # straps
+                        # k-means clustering to find the strap with the y coordinate
+                        num_clusters = len(operating_device_conf_dict.get('straps'))
+                        straps_y_reshaped = np.array(straps_y).reshape(-1, 1)
+                        kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(straps_y_reshaped)
+                        labels = kmeans.labels_
+                        straps = [[] for i in range(num_clusters)]
+                        for i in range(len(labels)):
+                            straps[labels[i]].append((straps_x[i], straps_y[i]))
+                        # print("straps: ", straps)
+                        for i in range(len(straps)):
+                            straps[i].sort(key=lambda x: x[0][0])
+                        # print("straps: ", straps)
+                        straps.sort(key=lambda x: x[0][1])
+                        straps_str = ""
+                        for i in range(len(operating_device_conf_dict.get('straps'))):
+                            for j in range(len(straps[i])):
+                                straps_str += operating_device_conf_dict.get('straps').get('line_'+str(i+1)).get('strap_'+str(j+1)) + ": " + str(straps[i][j][0][1]) + "\n"
+                        
+                        print("---------------------------------\n")
+                        print(lights_str)
+                        print("---------------------------------\n")
+                        print(switches_str)
+                        print("---------------------------------\n")
+                        print(straps_str)
+                        print("---------------------------------")
+
+                        if save_txt:  # Write to file again
+                            with open(txt_path + '.txt', 'a') as f:
+                                f.write('\n')
+                                f.write(lights_str)
+                                f.write(switches_str)
+                                f.write(straps_str)
+                    except Exception as e:
+                        print("------------------------------ ERROR ------------------------------")
+                        print("Perhaps something went wrong with the operating device detection. \n\nPlease check the operating device configuration file.")
+                        print("-------------------------------------------------------------------")
 
             # Print time (inference + NMS)
-            #print(f'{s}Done. ({t2 - t1:.3f}s)')
+            print(f'{s}Done. ({t2 - t1:.3f}s)')
 
             # Stream results
             if view_img:
@@ -170,6 +272,7 @@ if __name__ == '__main__':
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--trace', action='store_true', help='trace model')
+    parser.add_argument('--operating-device-conf', type=str, default=None, help='path of config file for operating device conf')
     opt = parser.parse_args()
     print(opt)
     #check_requirements(exclude=('pycocotools', 'thop'))
